@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xセンシティブ回避ツール</title>
+    <!-- Tailwind CSS CDN --><script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* HTMLのfile inputを非表示にする */
+        #file-upload {
+            display: none;
+        }
+
+        /* ドラッグオーバー時のスタイル */
+        .drag-over {
+            border-color: #3b82f6; /* blue-500 */
+            background-color: #1f2937; /* gray-800の少し暗い色 */
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen flex items-center justify-center p-4">
+
+    <!-- 1. パスワード入力画面 (デフォルトで表示) --><div id="password-gate" class="w-full max-w-sm bg-gray-800 p-6 md:p-8 rounded-xl shadow-2xl">
+        <h1 class="text-2xl font-bold text-center text-white mb-6">パスワード認証</h1>
+        <div class="mb-4">
+            <label for="password-input" class="block text-sm font-medium text-gray-300 mb-2">パスワード:</label>
+            <input type="password" id="password-input" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <button id="password-submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200">
+            認証
+        </button>
+        <p id="password-error" class="text-red-400 text-sm text-center mt-4 hidden">パスワードが正しくありません。</p>
+    </div>
+
+    <!-- 
+      2. ツール本体
+      「hidden」クラスを追加してデフォルトで非表示に
+    --><div id="drop-zone" class="w-full max-w-lg bg-gray-800 p-6 md:p-8 rounded-xl shadow-2xl transition-all duration-200 border-2 border-transparent hidden">
+        <h1 class="text-2xl font-bold text-center text-white mb-6">画像センシティブフィルター</h1>
+
+        <!-- 1. 画像アップロード --><!-- 
+          drop-zoneがドラッグ＆ドロップエリアを兼ねる
+          クリック領域としてfile-upload-button（ラベル）を用意 
+        --><input type="file" id="file-upload" accept="image/*">
+        
+        <label id="file-upload-button" for="file-upload" class="mb-6 flex flex-col items-center justify-center w-full h-48 border-2 border-gray-600 border-dashed rounded-lg cursor-pointer bg-gray-700 hover:bg-gray-600 transition duration-200">
+            <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                <svg class="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                <p class="mb-2 text-sm text-gray-400"><span class="font-semibold">クリック</span> または ドラッグ＆ドロップ</p>
+                <p class="text-xs text-gray-500">画像ファイル (PNG, JPG, GIFなど)</p>
+            </div>
+        </label>
+
+        <!-- 2. ノイズ調整スライダー --><div class="mb-6">
+            <label for="noise-slider" class="block text-sm font-medium text-gray-300 mb-2">
+                粒状ノイズ: <span id="noise-value">0.5</span>%
+            </label>
+            <input id="noise-slider" type="range" min="0.005" max="0.01" step="0.001" value="0.005" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- 3. 彩度調整スライダーの追加 --><div class="mb-6">
+            <label for="saturation-slider" class="block text-sm font-medium text-gray-300 mb-2">
+                彩度を下げる: <span id="saturation-value">-15</span>%
+            </label>
+            <input id="saturation-slider" type="range" min="-20" max="-10" step="1" value="-15" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- 4. 画像プレビュー (Canvas) --><div class="mb-6 bg-gray-900 rounded-lg overflow-hidden">
+            <canvas id="canvas" class="w-full h-auto"></canvas>
+        </div>
+
+        <!-- 5. ダウンロードボタン --><button id="download-button" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 opacity-50 cursor-not-allowed" disabled>
+            画像をダウンロード
+        </button>
+    </div>
+
+    <script>
+        // --- 定数宣言 ---
+        const fileInput = document.getElementById('file-upload');
+        const fileUploadButton = document.getElementById('file-upload-button'); // クリック用のラベル
+        const noiseSlider = document.getElementById('noise-slider');
+        const noiseValue = document.getElementById('noise-value');
+        const saturationSlider = document.getElementById('saturation-slider'); // 追加
+        const saturationValue = document.getElementById('saturation-value');   // 追加
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const downloadButton = document.getElementById('download-button');
+        const dropZone = document.getElementById('drop-zone');
+        
+        // パスワード関連の要素を取得
+        const passwordGate = document.getElementById('password-gate');
+        const passwordInput = document.getElementById('password-input');
+        const passwordSubmit = document.getElementById('password-submit');
+        const passwordError = document.getElementById('password-error');
+
+
+        let originalImage = null;
+        let currentNoiseAmount = 0.005; // 0.5%
+        let currentSaturationDecrease = 15; // 彩度を何%下げるか (例: 15%下げる -> 85%にする)
+
+        // --- パスワード認証 & localStorage (Cookieの代わり) ---
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            // 認証済みかチェック
+            if (localStorage.getItem('passwordAuthenticated') === 'true') {
+                // 認証済みなら、パスワード画面を非表示にし、ツールを表示
+                passwordGate.classList.add('hidden');
+                dropZone.classList.remove('hidden');
+            } else {
+                // 未認証なら、パスワード画面を表示 (デフォルト)
+                // (クラス操作は不要)
+            }
+        });
+
+        // パスワード入力フォームのEnterキーでも認証できるようにする
+        passwordInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault(); // フォーム送信を防ぐ
+                checkPassword();
+            }
+        });
+
+        // 「認証」ボタンクリック時の処理
+        passwordSubmit.addEventListener('click', () => {
+            checkPassword();
+        });
+
+        /**
+         * パスワードをチェックする関数
+         */
+        function checkPassword() {
+            const correctPassword = 'Bulma1234';
+            const enteredPassword = passwordInput.value;
+
+            if (enteredPassword === correctPassword) {
+                // パスワードが正しい場合
+                passwordGate.classList.add('hidden'); // 入力画面を非表示
+                dropZone.classList.remove('hidden');  // ツール本体を表示
+
+                // 認証情報をlocalStorageに保存
+                try {
+                    localStorage.setItem('passwordAuthenticated', 'true');
+                } catch (e) {
+                    console.error('localStorageへの保存に失敗しました:', e);
+                }
+
+            } else {
+                // パスワードが間違っている場合
+                passwordError.classList.remove('hidden'); // エラーメッセージを表示
+                passwordInput.value = ''; // 入力をクリア
+                passwordInput.focus(); // 再度入力欄にフォーカス
+            }
+        }
+
+
+        // --- アプリケーション本体のイベントリスナー ---
+
+        // ファイルアップロードボタン(ラベル)のクリックイベント
+        // (ラベルのfor属性が正しく設定されていれば、inputのクリックイベントが発火する)
+        
+        // input要素でファイルが選択された時の処理
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // --- ドラッグ＆ドロップ処理 ---
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault(); // デフォルトの動作をキャンセル
+            e.stopPropagation();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drag-over');
+
+            const files = e.dataTransfer.files;
+            if (files && files[0]) {
+                // inputのファイルリストも更新（必須ではないが、一貫性のため）
+                fileInput.files = files;
+                handleFile(files[0]);
+            }
+        });
+
+        // ノイズスライダーのイベント
+        noiseSlider.addEventListener('input', (e) => {
+            currentNoiseAmount = parseFloat(e.target.value);
+            // パーセンテージ表示を更新 (0.005 -> "0.5")
+            noiseValue.textContent = (currentNoiseAmount * 100).toFixed(1);
+            
+            // 画像が読み込まれていれば再描画
+            if (originalImage) {
+                applyFilters();
+            }
+        });
+
+        // 彩度スライダーのイベント (追加)
+        saturationSlider.addEventListener('input', (e) => {
+            currentSaturationDecrease = -parseInt(e.target.value); // マイナス値を正の値に変換して減少量として扱う
+            saturationValue.textContent = e.target.value; // スライダーの値をそのまま表示 (-10% ~ -20%)
+            
+            if (originalImage) {
+                applyFilters();
+            }
+        });
+
+        // ダウンロードボタンのイベント
+        downloadButton.addEventListener('click', () => {
+            if (!originalImage) return;
+
+            // ダウンロード用のリンクを作成
+            const link = document.createElement('a');
+            link.download = 'filtered_image.png';
+            // CanvasからデータURLを取得 (PNG形式)
+            link.href = canvas.toDataURL('image/png');
+            // リンクをクリックしてダウンロードを実行
+            link.click();
+        });
+
+
+        // --- メイン関数 ---
+
+        /**
+         * ファイル（画像）が選択されたときのメイン処理
+         * @param {File} file 選択された画像ファイル
+         */
+        function handleFile(file) {
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    originalImage = img; // 元画像を保存
+                    // Canvasのサイズを画像に合わせる
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    // フィルターを適用して描画
+                    applyFilters();
+
+                    // ダウンロードボタンを有効化
+                    downloadButton.disabled = false;
+                    downloadButton.classList.remove('opacity-50', 'cursor-not-allowed');
+                };
+                img.src = e.target.result;
+            };
+
+            reader.readAsDataURL(file);
+        }
+
+        /**
+         * Canvasにフィルターを適用して画像を描画する
+         */
+        function applyFilters() {
+            if (!originalImage) return;
+
+            // Canvasをクリア
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 彩度を下げるフィルターを適用
+            //    元の彩度から currentSaturationDecrease % 減らす。
+            //    例: 15%減らすなら 100 - 15 = 85%
+            const saturateAmount = 100 - currentSaturationDecrease;
+            ctx.filter = `saturate(${saturateAmount}%)`;
+            
+            // 元画像をCanvasに描画 (フィルターが適用される)
+            ctx.drawImage(originalImage, 0, 0);
+
+            // フィルターをリセット (その後の描画に影響しないように)
+            ctx.filter = 'none';
+
+            // 2. 白いオーバーレイ (25%透過)
+            ctx.globalAlpha = 0.25; // 透過度を設定
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalAlpha = 1.0; // 透過度を元に戻す
+            
+            // 3. 粒状ノイズをかける
+            addNoise(currentNoiseAmount);
+        }
+
+        /**
+         * Canvasにノイズを追加する
+         * @param {number} amount ノイズの割合 (0.0 から 1.0)
+         */
+        function addNoise(amount) {
+            // ImageDataを取得
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // ノイズの強さ (0-255のスケールに変換)
+            // amount 0.01 (1%) の場合、約 25.5 の範囲でノイズが乗る
+            const noiseIntensity = amount * 255;
+
+            // ピクセルデータをループ
+            for (let i = 0; i < data.length; i += 4) {
+                // -0.5 から 0.5 のランダムな値
+                const random = Math.random() - 0.5;
+                // ノイズの量
+                const noise = random * noiseIntensity;
+
+                // R, G, B 各チャンネルにノイズを加算
+                data[i]     += noise; // Red
+                data[i + 1] += noise; // Green
+                data[i + 2] += noise; // Blue
+                // Alpha (data[i + 3]) は変更しない
+            }
+
+            // ImageDataをCanvasに戻す
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+    </script>
+</body>
+</html>
+
