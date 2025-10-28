@@ -51,25 +51,42 @@
             </div>
         </label>
 
-        <!-- 2. ノイズ調整スライダー --><div class="mb-6">
-            <label for="noise-slider" class="block text-sm font-medium text-gray-300 mb-2">
-                粒状ノイズ: <span id="noise-value">0.5</span>%
-            </label>
-            <input id="noise-slider" type="range" min="0.005" max="0.01" step="0.001" value="0.005" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
-        </div>
-
-        <!-- 3. 彩度調整スライダーの追加 --><div class="mb-6">
+        <!-- 2. 彩度調整スライダー --><div class="mb-6">
             <label for="saturation-slider" class="block text-sm font-medium text-gray-300 mb-2">
                 彩度を下げる: <span id="saturation-value">-15</span>%
             </label>
             <input id="saturation-slider" type="range" min="-20" max="-10" step="1" value="-15" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
         </div>
 
-        <!-- 4. 画像プレビュー (Canvas) --><div class="mb-6 bg-gray-900 rounded-lg overflow-hidden">
-            <canvas id="canvas" class="w-full h-auto"></canvas>
+        <!-- 3. ノイズ調整スライダー --><div class="mb-6">
+            <label for="noise-slider" class="block text-sm font-medium text-gray-300 mb-2">
+                粒状ノイズ: <span id="noise-value">0.5</span>%
+            </label>
+            <input id="noise-slider" type="range" min="0.005" max="0.01" step="0.001" value="0.005" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
         </div>
 
-        <!-- 5. ダウンロードボタン --><button id="download-button" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 opacity-50 cursor-not-allowed" disabled>
+        <!-- 4. フィルターオプション --><div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-2">フィルターオプション:</label>
+            <div class="mt-2 space-y-2">
+                <div class="flex items-center">
+                    <input id="option-default" name="filter-option" type="radio" value="default" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-500" checked>
+                    <label for="option-default" class="ml-2 block text-sm text-gray-300">デフォルト（白25%透過 + 彩度低下 + ノイズ）</label>
+                </div>
+                <div class="flex items-center">
+                    <input id="option-white-overlay" name="filter-option" type="radio" value="white_overlay" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-500">
+                    <label for="option-white-overlay" class="ml-2 block text-sm text-gray-300">白フィルターを適用（白25%透過 + 彩度低下 + ノイズ）</label>
+                </div>
+                <div class="flex items-center">
+                    <input id="option-transparent-png" name="filter-option" type="radio" value="transparent_png" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-500">
+                    <label for="option-transparent-png" class="ml-2 block text-sm text-gray-300">画像を半透明PNGにする（画像全体25%透過 + 彩度低下 + ノイズ）</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. 画像プレビュー (Canvas) --><div class="mb-6 bg-gray-900 rounded-lg overflow-hidden border border-gray-700">
+            <canvas id="canvas" class="w-full h-auto bg-gray-700"></canvas> <!-- 背景色を追加 --></div>
+
+        <!-- 6. ダウンロードボタン --><button id="download-button" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 opacity-50 cursor-not-allowed" disabled>
             画像をダウンロード
         </button>
     </div>
@@ -77,11 +94,11 @@
     <script>
         // --- 定数宣言 ---
         const fileInput = document.getElementById('file-upload');
-        const fileUploadButton = document.getElementById('file-upload-button'); // クリック用のラベル
+        const fileUploadButton = document.getElementById('file-upload-button');
         const noiseSlider = document.getElementById('noise-slider');
         const noiseValue = document.getElementById('noise-value');
-        const saturationSlider = document.getElementById('saturation-slider'); // 追加
-        const saturationValue = document.getElementById('saturation-value');   // 追加
+        const saturationSlider = document.getElementById('saturation-slider');
+        const saturationValue = document.getElementById('saturation-value');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const downloadButton = document.getElementById('download-button');
@@ -93,13 +110,18 @@
         const passwordSubmit = document.getElementById('password-submit');
         const passwordError = document.getElementById('password-error');
 
+        // フィルターオプションのラジオボタン
+        const filterOptionRadios = document.querySelectorAll('input[name="filter-option"]');
+
 
         let originalImage = null;
         let currentNoiseAmount = 0.005; // 0.5%
         let currentSaturationDecrease = 15; // 彩度を何%下げるか (例: 15%下げる -> 85%にする)
+        let filterOption = 'default'; // 現在選択されているフィルターオプション ('default', 'white_overlay', 'transparent_png')
 
         // --- パスワード認証 & localStorage (Cookieの代わり) ---
-        
+        const CORRECT_PASSWORD = 'Bulma_Go'; // パスワードを変更
+
         document.addEventListener('DOMContentLoaded', () => {
             // 認証済みかチェック
             if (localStorage.getItem('passwordAuthenticated') === 'true') {
@@ -108,7 +130,6 @@
                 dropZone.classList.remove('hidden');
             } else {
                 // 未認証なら、パスワード画面を表示 (デフォルト)
-                // (クラス操作は不要)
             }
         });
 
@@ -129,10 +150,9 @@
          * パスワードをチェックする関数
          */
         function checkPassword() {
-            const correctPassword = 'Bulma1234';
             const enteredPassword = passwordInput.value;
 
-            if (enteredPassword === correctPassword) {
+            if (enteredPassword === CORRECT_PASSWORD) {
                 // パスワードが正しい場合
                 passwordGate.classList.add('hidden'); // 入力画面を非表示
                 dropZone.classList.remove('hidden');  // ツール本体を表示
@@ -155,9 +175,6 @@
 
         // --- アプリケーション本体のイベントリスナー ---
 
-        // ファイルアップロードボタン(ラベル)のクリックイベント
-        // (ラベルのfor属性が正しく設定されていれば、inputのクリックイベントが発火する)
-        
         // input要素でファイルが選択された時の処理
         fileInput.addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
@@ -204,7 +221,7 @@
             }
         });
 
-        // 彩度スライダーのイベント (追加)
+        // 彩度スライダーのイベント
         saturationSlider.addEventListener('input', (e) => {
             currentSaturationDecrease = -parseInt(e.target.value); // マイナス値を正の値に変換して減少量として扱う
             saturationValue.textContent = e.target.value; // スライダーの値をそのまま表示 (-10% ~ -20%)
@@ -212,6 +229,16 @@
             if (originalImage) {
                 applyFilters();
             }
+        });
+
+        // フィルターオプションのラジオボタンのイベントリスナー
+        filterOptionRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                filterOption = e.target.value;
+                if (originalImage) {
+                    applyFilters();
+                }
+            });
         });
 
         // ダウンロードボタンのイベント
@@ -273,19 +300,31 @@
             const saturateAmount = 100 - currentSaturationDecrease;
             ctx.filter = `saturate(${saturateAmount}%)`;
             
-            // 元画像をCanvasに描画 (フィルターが適用される)
-            ctx.drawImage(originalImage, 0, 0);
+            // 描画モードをリセット
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = 1.0; // 透過度をデフォルトに戻す
 
+            // オプションに応じて画像を描画
+            if (filterOption === 'transparent_png') {
+                // 画像自体を半透明にする
+                ctx.globalAlpha = 0.25; // 画像自体の透過度
+                ctx.drawImage(originalImage, 0, 0);
+                ctx.globalAlpha = 1.0; // 透過度を元に戻す
+            } else {
+                // 白フィルターを適用する場合 (default, white_overlay)
+                ctx.drawImage(originalImage, 0, 0);
+                
+                // 白いオーバーレイ (25%透過)
+                ctx.globalAlpha = 0.25; // 透過度を設定
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.globalAlpha = 1.0; // 透過度を元に戻す
+            }
+            
             // フィルターをリセット (その後の描画に影響しないように)
             ctx.filter = 'none';
 
-            // 2. 白いオーバーレイ (25%透過)
-            ctx.globalAlpha = 0.25; // 透過度を設定
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.globalAlpha = 1.0; // 透過度を元に戻す
-            
-            // 3. 粒状ノイズをかける
+            // 2. 粒状ノイズをかける
             addNoise(currentNoiseAmount);
         }
 
